@@ -1,12 +1,15 @@
-# Cajathon · Cauce
+# Cajathon · CajaEscudo
 
-Prototipo para el desafío **NEG-01: cuotas que se adaptan al flujo del negocio**.
-Cauce relaciona exposición climática, valorización de activos, medidas preventivas
-y simulación de cuotas para microempresarios de La Libertad.
+Prototipo funcional del desafío **RIE-01: inteligencia predictiva de riesgo
+climático y crediticio para microfinanzas**.
 
-## Inicio rápido
+CajaEscudo explora la cadena amenaza → negocio → flujo → presión de pago →
+impacto en cartera → prevención. Está pensado para analistas de riesgos y para
+una demostración explicable ante los jueces de Cajathon.
 
-Requiere Bun. Comandos desde la raíz del repositorio:
+## Ejecutar
+
+Requiere Bun:
 
 ```sh
 cd apps/web
@@ -14,30 +17,45 @@ bun install --frozen-lockfile
 bun run dev
 ```
 
-La aplicación se sirve en `http://localhost:5173` si el puerto está disponible.
-El prototipo web funciona sin levantar la API ni configurar credenciales.
+Abre la URL que muestra Vite (normalmente `http://localhost:5173`).
 
 ```sh
 bun run test
 bun run build
 ```
 
-## Organización
+## Qué funciona
 
-| Directorio | Contenido |
+- 60 clientes sintéticos, cinco segmentos y cinco amenazas.
+- Mapa real OpenStreetMap, puntos ficticios y capa de calor calculada.
+- Actualización Beta–Bernoulli y Monte Carlo con choques compartidos.
+- Función logística de estrés **no entrenada**, pérdida crediticia supuesta,
+  histograma y comparación base/estrés/prevención.
+- Planificación preventiva mediante mochila 0/1 bajo presupuesto.
+- Agentes locales deterministas con trazas de herramientas.
+- Revisión humana almacenada en el navegador y exportación CSV.
+- Recorrido guiado de cinco pasos para los jueces.
+
+No necesita API, credenciales ni Neon. Fuentes y logos se sirven localmente;
+el mapa base necesita internet. Las simulaciones funcionan sin mosaicos externos.
+
+## Documentación
+
+| Archivo | Contenido |
 |---|---|
-| [`apps/web`](apps/web/README.md) | Vue 3, Vite, TypeScript, Nuxt UI 4 y modelo demostrativo |
-| [`apps/api`](apps/api/README.md) | API existente con FastAPI, SQLModel y Neon; no conectada al prototipo |
-| [`docs/prototipo-cauce.md`](docs/prototipo-cauce.md) | Alcance, arquitectura, cálculos y guía de validación |
-| [`apps/web/DESIGN.md`](apps/web/DESIGN.md) | Decisiones UX/UI y referencias de Figma |
+| [`docs/cajaescudo-rie01.md`](docs/cajaescudo-rie01.md) | Diseño, evaluación de modelos, fórmulas, límites y guion de demo |
+| [`apps/web/README.md`](apps/web/README.md) | Aplicación y estructura |
+| [`apps/api/README.md`](apps/api/README.md) | API FastAPI existente, no conectada a esta demo |
+| [`design/cajaescudo/README.md`](design/cajaescudo/README.md) | Mockups SVG anteriores; no son la aplicación actual |
+| [`docs/prototipo-cauce.md`](docs/prototipo-cauce.md) | Entrega histórica NEG-01 |
 
-## Diseño
+## Límites
 
-[Ver tres pantallas editables en Figma](https://www.figma.com/design/bZiPzO1i7ycKpmi5b43EDw).
+**Datos y escenarios sintéticos.** No se integran avisos oficiales ni datos
+financieros reales. No hay predicción calibrada, provisión regulatoria,
+contacto a clientes ni modificación automática de créditos. Los agentes
+son software determinista local, **no LLM conectados**.
 
-## Estado y límites
-
-**Datos sintéticos y cartografía esquemática.** SENAMHI e INDECI son fuentes
-previstas, no integraciones activas. El cálculo no es un pronóstico oficial,
-un modelo predictivo calibrado ni una aprobación crediticia. Los planes y las
-propuestas solo existen durante la sesión de la página; no se envían a clientes.
+Figma: el archivo anterior se conserva, pero la cuenta MCP actualmente
+conectada no tiene acceso de edición. Esta versión funcional vive en código;
+no se afirma haberla sincronizado a Figma.

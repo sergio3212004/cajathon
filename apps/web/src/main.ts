@@ -5,7 +5,9 @@ import '@fontsource/manrope/latin-500.css'
 import '@fontsource/manrope/latin-600.css'
 import '@fontsource/manrope/latin-700.css'
 import '@fontsource/manrope/latin-800.css'
-import './style.css'
-import App from './App.vue'
+import '@fontsource/chakra-petch/latin-600.css'
+import '@fontsource/chakra-petch/latin-700.css'
+import './escudo.css'
+import App from './EscudoApp.vue'
 
 createApp(App).use(ui).mount('#app')
