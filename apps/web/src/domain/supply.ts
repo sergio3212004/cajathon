@@ -2,6 +2,12 @@
 export const supplyVersion = 'RED-1.0'
 export const origins = ['Piura', 'Ica', 'Junín'] as const
 export type Origin = typeof origins[number]
+export const originCoordinates: Record<Origin, [number, number]> = {
+  Piura: [-5.1945, -80.6328],
+  Ica: [-14.0678, -75.7286],
+  Junín: [-12.0651, -75.2049],
+}
+export const regionalHubCoordinates: [number, number] = [-8.1116, -79.0288]
 export type ImpactMode = 'combined' | 'direct' | 'indirect'
 export interface SupplyScenario {
   enabled: boolean
@@ -27,7 +33,11 @@ export const supplyChains: SupplyChain[] = [
   { id: 'inputs', product: 'Insumos productivos y ferretería', origin: 'Junín', producer: 'Proveedor de insumos del centro',
     corridor: 'Corredor central', hub: 'Distribuidor de Huancayo', alternative: 'Almacén alternativo de Trujillo', dependency: .85 },
 ]
-export function chainForClient(client: { id: string; sector: string; name?: string }) {
+export function chainForClient(client: { id: string; sector: string; name?: string; supplyOrigin?: Origin }) {
+  if (client.supplyOrigin) {
+    const byOrigin = supplyChains.find(c => c.origin === client.supplyOrigin)
+    if (byOrigin) return byOrigin
+  }
   // Mapping is an explicit fixture, not inferred real transactions.
   const productiveInput = client.sector === 'Agricultura' || /ferretería|taller/i.test(client.name ?? '')
   return supplyChains.find(c => c.id === (productiveInput ? 'inputs' : client.sector === 'Manufactura' ? 'textiles' : 'rice'))!
@@ -66,14 +76,17 @@ export interface SupplyImpact {
   outageDays: number; unmetDays: number; revenueDrop: number; costRatio: number
 }
 export function supplyImpact(
-  client: { id: string; sector: string; name?: string }, scenario: SupplyScenario,
+  client: { id: string; sector: string; name?: string; supplyOrigin?: Origin }, scenario: SupplyScenario,
   intensity: number, severity: number, occurs: boolean, protectedClient: boolean,
+  options?: { extraInventoryDays?: number; extraSubstitution?: number },
 ): SupplyImpact {
   const chain = chainForClient(client)
   const outageDays = scenario.enabled && chain.origin === scenario.origin && occurs
     ? Math.min(30, scenario.outageDays * intensity / 100 * severity) : 0
-  const substitution = Math.min(1, scenario.substitution / 100 + (protectedClient ? .3 : 0))
-  const inventory = Math.min(30, scenario.inventoryDays + (protectedClient ? 3 : 0))
+  const extraSub = options?.extraSubstitution ?? .3
+  const extraInv = options?.extraInventoryDays ?? 3
+  const substitution = Math.min(1, scenario.substitution / 100 + (protectedClient ? extraSub : 0))
+  const inventory = Math.min(30, scenario.inventoryDays + (protectedClient ? extraInv : 0))
   // Analytical equivalent of the daily inventory recurrence (constant demand).
   const unmetDays = Math.max(0, outageDays * chain.dependency * (1 - substitution) - inventory)
   return {

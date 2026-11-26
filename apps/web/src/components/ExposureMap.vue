@@ -3,13 +3,22 @@ import { onMounted, onBeforeUnmount, watch, ref } from 'vue'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import type { ClientResult } from '../domain/escudo'
+import { originCoordinates, regionalHubCoordinates, type Origin } from '../domain/supply'
 
-const props = defineProps<{ items: ClientResult[]; selected: string; layer: 'damage' | 'payment' | 'supply'; heat: boolean }>()
+const props = defineProps<{
+  items: ClientResult[]
+  selected: string
+  layer: 'damage' | 'payment' | 'supply'
+  heat: boolean
+  corridors?: boolean
+  activeOrigin?: Origin
+}>()
 const emit = defineEmits<{ select: [id: string] }>()
 const element = ref<HTMLDivElement>()
 const offline = ref(false)
 let map: L.Map | undefined
 let markers: L.LayerGroup | undefined
+let corridorLayer: L.LayerGroup | undefined
 let canvas: HTMLCanvasElement | undefined
 let observer: ResizeObserver | undefined
 let tileErrors = 0
@@ -51,6 +60,27 @@ function draw() {
 function renderMarkers() {
   if (!map || !markers) return
   markers.clearLayers()
+  corridorLayer?.clearLayers()
+  if (props.corridors && corridorLayer) {
+    for (const [origin, coord] of Object.entries(originCoordinates) as [Origin, [number, number]][]) {
+      const active = origin === props.activeOrigin
+      const line = L.polyline([coord, regionalHubCoordinates], {
+        color: active ? '#fb775e' : '#85a7b0',
+        weight: active ? 3 : 1.5,
+        dashArray: active ? '6 4' : '3 6',
+        opacity: active ? 0.92 : 0.45,
+      })
+      const node = L.circleMarker(coord, {
+        radius: active ? 8 : 5,
+        color: '#ffffff',
+        weight: 2,
+        fillColor: active ? '#fb775e' : '#4a7a85',
+        fillOpacity: 1,
+      }).bindTooltip(`Origen ${origin}${active ? ' (choque activo)' : ''}`, { direction: 'top' })
+      corridorLayer.addLayer(line)
+      corridorLayer.addLayer(node)
+    }
+  }
   props.items.forEach(r => {
     const color = r.level === 'Alta' ? '#fb775e' : r.level === 'Moderada' ? '#ffce5b' : '#b6d1c9'
     const marker = L.circleMarker([r.client.lat, r.client.lng], {
@@ -63,9 +93,11 @@ function renderMarkers() {
     marker.on('click', () => emit('select', r.client.id))
     markers!.addLayer(marker)
   })
-  const ids = props.items.map(r => r.client.id).sort().join(',')
+  const ids = `${props.items.map(r => r.client.id).sort().join(',')}|${props.corridors ? 'c' : 'n'}`
   if (ids !== fittedIds && props.items.length) {
-    map.fitBounds(L.latLngBounds(props.items.map(r => [r.client.lat, r.client.lng] as [number, number])), { padding: [30, 30], maxZoom: 12, animate: false })
+    const points: [number, number][] = props.items.map(r => [r.client.lat, r.client.lng])
+    if (props.corridors && props.activeOrigin) points.push(originCoordinates[props.activeOrigin])
+    map.fitBounds(L.latLngBounds(points), { padding: [30, 30], maxZoom: 12, animate: false })
     fittedIds = ids
   }
   draw()
@@ -83,13 +115,14 @@ onMounted(() => {
   canvas = L.DomUtil.create('canvas', 'heat-canvas') as HTMLCanvasElement
   canvas.setAttribute('aria-hidden', 'true')
   map.getPanes().overlayPane.appendChild(canvas)
+  corridorLayer = L.layerGroup().addTo(map)
   markers = L.layerGroup().addTo(map)
   map.on('moveend zoomend resize', draw)
   observer = new ResizeObserver(() => { map?.invalidateSize(); draw() })
   observer.observe(element.value)
   renderMarkers()
 })
-watch(() => [props.items, props.selected, props.layer, props.heat], renderMarkers)
+watch(() => [props.items, props.selected, props.layer, props.heat, props.corridors, props.activeOrigin], renderMarkers)
 onBeforeUnmount(() => { observer?.disconnect(); map?.remove() })
 </script>
 

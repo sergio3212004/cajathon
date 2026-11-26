@@ -1,5 +1,5 @@
 import { businesses } from './data'
-import { chainForClient, defaultSupply, supplyImpact, supplyVersion, validateSupply, type ImpactMode, type SupplyScenario } from './supply'
+import { chainForClient, defaultSupply, supplyImpact, supplyVersion, validateSupply, type ImpactMode, type Origin, type SupplyScenario } from './supply'
 
 export const modelVersion = 'CE-2.0'
 
@@ -12,6 +12,7 @@ export interface Client {
   income: number; expenses: number; assets: number; balance: number
   payment: number; otherDebt: number; cash: number; arrears: number
   incidents: number; observations: number; cost: number
+  supplyOrigin?: Origin
 }
 export interface ClimateScenario {
   hazard: Threat; intensity: number; days: number; paths: number; seed: number; lgd: number
@@ -117,6 +118,31 @@ export function sensitivity(hazard: Threat, sector: string) {
   if (hazard === 'Calor extremo') return sector === 'Agricultura' ? .95 : .45
   return hazard === 'Inundación' ? 1 : .7
 }
+
+export interface MeasureProfile {
+  label: string
+  protection: number
+  extraInventoryDays: number
+  extraSubstitution: number
+}
+
+/** Sector and hazard-specific preventive effectiveness profile (illustrative). */
+export function measureProfile(sector: string, hazard: Threat): MeasureProfile {
+  if (hazard === 'Sequía') {
+    return sector === 'Agricultura'
+      ? { label: 'Reserva de agua y riego eficiente', protection: .42, extraInventoryDays: 4, extraSubstitution: .25 }
+      : { label: 'Reserva y abastecimiento alternativo', protection: .32, extraInventoryDays: 4, extraSubstitution: .35 }
+  }
+  if (hazard === 'Friaje') {
+    return { label: 'Cobertura térmica de activos sensibles', protection: .4, extraInventoryDays: 2, extraSubstitution: .25 }
+  }
+  if (hazard === 'Calor extremo') {
+    return { label: 'Sombra y protección térmica de inventario', protection: .36, extraInventoryDays: 3, extraSubstitution: .3 }
+  }
+  return sector === 'Agricultura'
+    ? { label: 'Drenaje y protección de la cosecha', protection: .44, extraInventoryDays: 3, extraSubstitution: .25 }
+    : { label: 'Elevar inventario y proteger equipos', protection: .38, extraInventoryDays: 3, extraSubstitution: .3 }
+}
 export interface ClientResult {
   client: Client; damage: number; shortfall: number; pd: number; basePD: number
   expectedLoss: number; baseLoss: number; coverage: number; closedDays: number; revenueDrop: number
@@ -172,13 +198,17 @@ export function simulateClimate(clients: Client[], scenario: ClimateScenario, pr
       const eventDraw = path % 2 === 0 ? globalEvent : districtEvent[c.district]!
       const occurs = eventDraw < probability
       const severity = scenario.impactMode === 'indirect' ? 0 : clamp(scenario.intensity / 100 * c.exposure * sensitivity(scenario.hazard, c.sector) * globalSeverity)
-      const protection = selected.has(c.id) ? .38 : 0
+      const isProtected = selected.has(c.id)
+      const profile = measureProfile(c.sector, scenario.hazard)
+      const isHousehold = c.segment === 'Consumo' || c.segment === 'Hipotecario'
+      const protection = isProtected ? profile.protection : 0
       const damageRatio = occurs ? severity ** 1.6 * c.vulnerability * (1 - protection) : 0
       const damage = c.assets * damageRatio
-      const closedDays = occurs ? Math.min(30, severity * 16 * (1 - protection)) : 0
-      const directDrop = Math.min(.9, closedDays / 30 + damageRatio * .25)
+      const closedDays = occurs ? Math.min(30, severity * (isHousehold ? 8 : 16) * (1 - protection)) : 0
+      const directDrop = Math.min(.9, closedDays / 30 + damageRatio * (isHousehold ? .15 : .25))
       const upstream = supplyImpact(c, { ...scenario.supply, enabled: scenario.supply.enabled && scenario.impactMode !== 'direct' },
-        scenario.intensity, globalSeverity, upstreamOccurs, selected.has(c.id))
+        scenario.intensity, globalSeverity, upstreamOccurs, isProtected,
+        { extraInventoryDays: profile.extraInventoryDays, extraSubstitution: profile.extraSubstitution })
       // Apply supply loss only to activity surviving the direct shock.
       const drop = directDrop + (1 - directDrop) * upstream.revenueDrop
       const revenueNoise = Math.exp(.10 * normal(clientRng) - .005)
@@ -227,58 +257,106 @@ export function simulateClimate(clients: Client[], scenario: ClimateScenario, pr
   }
 }
 export interface Candidate { id: string; cost: number; benefit: number }
-/** Exact 0/1 knapsack with integer PEN costs; no negative/zero-gain actions. */
-export function optimize(candidates: Candidate[], budget: number) {
-  if (!Number.isFinite(budget) || budget < 0 || budget > 100000) throw new Error('Presupuesto inválido')
-  const units = Math.floor(budget / 100)
-  const valid = candidates.filter(c => c.benefit > 0 && c.cost > 0 && c.cost % 100 === 0)
+export interface PlanOverrides {
+  forcedIncludeIds?: string[]
+  excludedIds?: string[]
+}
+export interface PlanResult {
+  ids: string[]
+  cost: number
+  benefit: number
+  forcedIds: string[]
+  excludedIds: string[]
+  overBudget: boolean
+}
+
+/** Exact 0/1 knapsack in S/ 10 units with optional manual analyst overrides. */
+export function optimize(candidates: Candidate[], budget: number, overrides: PlanOverrides = {}): PlanResult {
+  if (!Number.isFinite(budget) || budget < 0 || budget > 500000) throw new Error('Presupuesto inválido')
+  const excludedSet = new Set(overrides.excludedIds ?? [])
+  const forcedSet = new Set((overrides.forcedIncludeIds ?? []).filter(id => !excludedSet.has(id)))
+
+  const forcedItems = candidates.filter(c => forcedSet.has(c.id) && c.cost > 0)
+  const forcedIds = forcedItems.map(c => c.id)
+  const forcedCost = forcedItems.reduce((s, c) => s + c.cost, 0)
+  const forcedBenefit = forcedItems.reduce((s, c) => s + c.benefit, 0)
+  const remainingBudget = Math.max(0, budget - forcedCost)
+
+  const unitSize = 10
+  const units = Math.floor(remainingBudget / unitSize)
+  const valid = candidates.filter(c => !excludedSet.has(c.id) && !forcedSet.has(c.id) && c.benefit > 0 && c.cost > 0)
   const dp: number[][] = [Array(units + 1).fill(0)]
   valid.forEach((c, i) => {
-    const cost = c.cost / 100
+    const cost = Math.max(1, Math.round(c.cost / unitSize))
     dp.push(Array.from({ length: units + 1 }, (_, b) => cost <= b ? Math.max(dp[i]![b]!, dp[i]![b - cost]! + c.benefit) : dp[i]![b]!))
   })
   let remaining = units
-  const ids: string[] = []
+  const autoIds: string[] = []
   for (let i = valid.length; i > 0; i--) {
     if (dp[i]![remaining]! > dp[i - 1]![remaining]!) {
       const c = valid[i - 1]!
-      ids.push(c.id); remaining -= c.cost / 100
+      autoIds.push(c.id); remaining -= Math.max(1, Math.round(c.cost / unitSize))
     }
   }
-  return { ids, cost: ids.reduce((s, id) => s + valid.find(c => c.id === id)!.cost, 0), benefit: dp[valid.length]![units]! }
+  const ids = [...forcedIds, ...autoIds]
+  const autoCost = autoIds.reduce((s, id) => s + valid.find(c => c.id === id)!.cost, 0)
+  const totalCost = forcedCost + autoCost
+  return {
+    ids,
+    cost: totalCost,
+    benefit: forcedBenefit + dp[valid.length]![units]!,
+    forcedIds,
+    excludedIds: [...excludedSet],
+    overBudget: totalCost > budget,
+  }
 }
 export interface AgentStep { name: string; tool: string; status: 'ok' | 'warning'; evidence: string }
 export interface Analysis {
-  before: Simulation; after: Simulation; plan: ReturnType<typeof optimize>; trace: AgentStep[]
+  before: Simulation; after: Simulation; plan: PlanResult; trace: AgentStep[]
   directOnly: Simulation; indirectOnly: Simulation | null
   scenario: ClimateScenario; budget: number; fingerprint: string
 }
-export function scenarioFingerprint(clients: Client[], scenario: ClimateScenario, budget: number) {
-  const data = JSON.stringify({ scenario, budget, clients })
+export function scenarioFingerprint(clients: Client[], scenario: ClimateScenario, budget: number, overrides: PlanOverrides = {}) {
+  const data = JSON.stringify({ scenario, budget, clients, overrides })
   let a = 2166136261, b = 5381
   for (const ch of data) { a = Math.imul(a ^ ch.charCodeAt(0), 16777619); b = Math.imul(b, 33) ^ ch.charCodeAt(0) }
   // Local identity/checksum, not a cryptographic or institutional audit signature.
   return `${modelVersion}/${supplyVersion}/${(a >>> 0).toString(16).padStart(8, '0')}${(b >>> 0).toString(16).padStart(8, '0')}`
 }
-export function analyze(clients: Client[], scenario: ClimateScenario, budget: number): Analysis {
+export function analyze(clients: Client[], scenario: ClimateScenario, budget: number, overrides: PlanOverrides = {}): Analysis {
   const before = simulateClimate(clients, scenario)
   const full = simulateClimate(clients, scenario, clients.map(c => c.id))
-  const plan = optimize(before.clients.map((r, i) => ({ id: r.client.id, cost: r.client.cost, benefit: Math.max(0, r.economicImpact - full.clients[i]!.economicImpact) })), budget)
+  const plan = optimize(before.clients.map((r, i) => ({ id: r.client.id, cost: r.client.cost, benefit: Math.max(0, r.economicImpact - full.clients[i]!.economicImpact) })), budget, overrides)
   const after = simulateClimate(clients, scenario, plan.ids)
   const directOnly = scenario.impactMode === 'direct' ? before : simulateClimate(clients, { ...scenario, impactMode: 'direct' })
   // A direct-only analysis remains usable when network evidence is unavailable.
   // Do not fabricate a zero for the unavailable indirect diagnostic.
   const indirectOnly = scenario.supply.enabled && scenario.supply.dataQuality !== 'complete'
     ? null : scenario.impactMode === 'indirect' ? before : simulateClimate(clients, { ...scenario, impactMode: 'indirect' })
+  const overrideNote = plan.forcedIds.length || plan.excludedIds.length
+    ? ` Overrides manuales: ${plan.forcedIds.length} incluidos, ${plan.excludedIds.length} excluidos${plan.overBudget ? ' (excede presupuesto)' : ''}.`
+    : ''
   return {
     before, after, directOnly, indirectOnly, plan, scenario, budget,
-    fingerprint: scenarioFingerprint(clients, scenario, budget),
+    fingerprint: scenarioFingerprint(clients, scenario, budget, overrides),
     trace: [
-      { name: 'Vigía de datos', tool: 'validateScenario + validateSupply + posterior', status: 'warning', evidence: `${clients.length} registros sintéticos; historial binario supuesto. Sin ingestión oficial. Ubicaciones ficticias. Calidad de fixture: ${scenario.supply.dataQuality}.` },
-      { name: 'Analista de escenarios y dependencias', tool: 'chainForClient + supplyImpact + simulateClimate', status: 'ok', evidence: `${scenario.paths.toLocaleString('es-PE')} trayectorias; semilla ${scenario.seed}. Origen ${scenario.supply.origin}; ${before.clients.filter(r => r.indirectLoss > 0).length} clientes con impacto indirecto. Canales ${scenario.impactMode}; choque compartido e inventario normalizado. ${new Set(clients.map(c => chainForClient(c).id)).size} cadenas sintéticas. Logit supuesto.` },
-      { name: 'Planificador preventivo', tool: 'optimize (mochila 0/1)', status: 'ok', evidence: `${plan.ids.length} intervenciones; costo S/ ${plan.cost}. Objetivo: daño físico más pérdida operativa evitados; protección física, reserva y sustitución hipotéticas. Sesgo hacia negocios de mayor valor por revisar.` },
+      { name: 'Vigía de datos', tool: 'validateScenario + validateSupply + posterior', status: 'warning', evidence: `${clients.length} registros; historial binario. Calidad de datos: ${scenario.supply.dataQuality}.` },
+      { name: 'Analista de escenarios y dependencias', tool: 'chainForClient + supplyImpact + simulateClimate', status: 'ok', evidence: `${scenario.paths.toLocaleString('es-PE')} trayectorias; semilla ${scenario.seed}. Origen ${scenario.supply.origin}; ${before.clients.filter(r => r.indirectLoss > 0).length} clientes con impacto indirecto. Canales ${scenario.impactMode}; choque compartido e inventario normalizado. ${new Set(clients.map(c => chainForClient(c).id)).size} cadenas.` },
+      { name: 'Planificador preventivo', tool: 'optimize (mochila 0/1)', status: plan.overBudget ? 'warning' : 'ok', evidence: `${plan.ids.length} intervenciones; costo S/ ${plan.cost}. Objetivo: daño físico más pérdida operativa evitados con perfiles por sector y amenaza.${overrideNote}` },
       { name: 'Revisor de seguridad', tool: 'guardrails', status: 'warning', evidence: 'Requiere aprobación humana. No modifica créditos, no contacta clientes y no atribuye PD real. Agentes locales deterministas, sin LLM.' },
     ],
+  }
+}
+
+export function compareAnalyses(baseline: Analysis, current: Analysis) {
+  return {
+    economicImpactDelta: current.before.economicImpact - baseline.before.economicImpact,
+    expectedLossDelta: current.before.expectedLoss - baseline.before.expectedLoss,
+    indirectLossDelta: current.before.indirectLoss - baseline.before.indirectLoss,
+    residualLossDelta: current.after.expectedLoss - baseline.after.expectedLoss,
+    highPriorityBaseline: baseline.before.clients.filter(r => r.level === 'Alta').length,
+    highPriorityCurrent: current.before.clients.filter(r => r.level === 'Alta').length,
+    planCostDelta: current.plan.cost - baseline.plan.cost,
   }
 }
 export function histogram(values: number[], count = 20) {
