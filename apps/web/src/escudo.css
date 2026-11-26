@@ -2,6 +2,17 @@
 @import "@nuxt/ui";
 
 @theme { --font-sans: 'Manrope', sans-serif; }
+.skip-link:not(:focus){visibility:hidden}
+.analysis-content{transition:opacity .15s}
+.analysis-content.is-updating{opacity:.65}
+.method-link{display:flex;align-items:center;gap:6px;border:0;background:none;color:var(--muted);font-size:10px}
+.method-details{border-top:1px solid var(--line);padding:15px 0;margin:20px 0;color:var(--muted);font-size:11px;line-height:1.9}
+.method-details summary{font-weight:600}
+.method-details p{margin-top:10px;max-width:95ch}
+.trace-fingerprint{overflow-wrap:anywhere}
+.agent-step-details{margin-top:9px;font-size:10px;color:var(--muted)}
+.agent-step-details summary{color:#607a83}
+.scenario-console>.scenario-label{min-width:180px}
 .escudo-app{background:#f3f5f6;min-height:100vh}
 .leaflet-host .leaflet-tile{filter:grayscale(1) invert(1) brightness(.8) contrast(.85)}
 .heat-canvas{filter:blur(7px)}

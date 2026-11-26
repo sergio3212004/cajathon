@@ -34,7 +34,7 @@ bun run build
 - Planificación preventiva mediante mochila 0/1 bajo presupuesto.
 - Agentes locales deterministas con trazas de herramientas.
 - Revisión humana almacenada en el navegador y exportación CSV.
-- Recorrido guiado de cinco pasos para los jueces.
+- Análisis automático al cambiar condiciones, filtros o presupuesto.
 
 No necesita API, credenciales ni Neon. Fuentes y logos se sirven localmente;
 el mapa base necesita internet. Las simulaciones funcionan sin mosaicos externos.

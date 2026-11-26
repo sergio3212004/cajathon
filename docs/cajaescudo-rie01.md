@@ -21,13 +21,13 @@ prevención en lugar de un semáforo opaco.
 - Títulos **Chakra Petch**, presente en el sitio de Cajathon.
 - Cuerpo **Manrope**, continuidad con el producto anterior y lectura de cifras.
 - Navegación superior, controles compactos, mapa amplio y expediente lateral.
-- Estados con palabras y color; reducción de movimiento; controles nativos,
-  lista accesible alternativa al mapa y tour con gestión de foco.
+- Estados con palabras y color; reducción de movimiento; controles nativos
+  y lista accesible alternativa al mapa.
 
 ```text
 Marca de producto / Caja Trujillo                  Cajathon / recorrido
 Territorio | Cartera y pérdidas | Plan preventivo | Agentes | Modelos
-Amenaza / territorio / segmento / intensidad / ventana / ejecutar
+Amenaza / territorio / segmento / intensidad / ventana
 ┌───────────────────────────┬──────────────────────┐
 │ Mapa real + calor         │ Daño / presión /      │
 │ Dos variables distinguibles│ pérdida / prevención │
@@ -201,9 +201,15 @@ no se finge una conversación, búsqueda oficial o razonamiento de un modelo.
 Futuro LLM: solo explicaciones y solicitudes de información con salidas
 estructuradas, sin alterar los cálculos ni decisiones crediticias.
 
-Los Web Workers separan cálculo y UI. Las respuestas obsoletas se ignoran.
-Los controles modificados muestran estado pendiente y bloquean guardado y
-exportación hasta recalcular. El CSV incluye semilla, parámetros y versión.
+Los Web Workers separan cálculo y UI. Al cambiar los controles se espera
+250 ms sin nuevas entradas y se cancela el worker anterior si seguía trabajando.
+Las respuestas obsoletas se ignoran. Durante la actualización, los resultados
+anteriores se atenúan y se bloquean guardado y exportación. El CSV incluye
+semilla, parámetros y versión.
+
+La interfaz operativa no contiene botones de ejecución ni recorridos para
+jueces. Los detalles técnicos se presentan en secciones desplegables;
+la metodología mantiene explícitos los datos ficticios y las limitaciones.
 
 La revisión requiere evidencia, se guarda en el navegador y se vincula
 a versión, parámetros y cartera mediante una huella reproducible.
@@ -229,7 +235,7 @@ desempeño predictivo de producción.
 ## Guion de demostración (3–5 minutos)
 
 1. Territorio, inundación 75%: recorrer calor y expediente.
-2. Cambiar a intensidad cero y ejecutar: desaparece daño, queda riesgo base.
+2. Cambiar a intensidad cero: desaparece daño, queda riesgo base.
 3. Restaurar el escenario y comparar sequía/agricultura.
 4. Cartera y pérdidas: mostrar histograma, rango y puente de prevención.
 5. Presupuesto cero frente a S/15,000: cambia la combinación de medidas.

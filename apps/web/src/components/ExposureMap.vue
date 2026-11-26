@@ -89,9 +89,9 @@ onBeforeUnmount(() => { observer?.disconnect(); map?.remove() })
 <template>
   <div class="territory-map">
     <div ref="element" class="leaflet-host" role="region" aria-label="Mapa de negocios sintéticos cerca de Trujillo. Selecciona también desde la lista accesible de clientes."></div>
-    <div class="territory-stamp"><span class="signal-dot"></span> Trujillo y alrededores <small>Ubicaciones sintéticas</small></div>
+    <div class="territory-stamp"><span class="signal-dot"></span> Trujillo y alrededores <small>Distribución de cartera</small></div>
     <div v-if="offline" class="map-offline" role="status">Mapa base no disponible. Los puntos conservan coordenadas; usa la lista de clientes.</div>
     <div class="map-heat-key"><strong>{{ layer === 'damage' ? 'Daño relativo del negocio' : 'Probabilidad de flujo insuficiente' }}</strong><div class="heat-ramp"></div><span>0% <i>Interpolación visual</i> {{ layer === 'damage' ? '≥15%' : '≥50%' }}</span></div>
-    <div class="map-caption">Capa sintética · no es un mapa oficial de amenaza</div>
+    <div class="map-caption">Impacto estimado · análisis territorial</div>
   </div>
 </template>

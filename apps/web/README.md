@@ -12,7 +12,7 @@ bun run build
 
 ## Estructura activa
 
-- `src/EscudoApp.vue`: cinco vistas, controles, revisiones locales, CSV y tour.
+- `src/EscudoApp.vue`: cinco vistas, análisis automático, revisiones locales y CSV.
 - `src/escudo.css`: identidad y layouts adaptables.
 - `src/domain/escudo.ts`: cartera sintética, Beta, Monte Carlo, logit,
   optimizador y coordinación de agentes locales.
@@ -41,7 +41,9 @@ Recibe solicitudes de mosaicos según la zona visible; no se envía la cartera
 ni se consulta un LLM. Cumplir la política de uso de mosaicos antes de escalar
 el prototipo. Si no cargan, la lista de clientes sigue disponible.
 
-Los parámetros cambiados invalidan exportación y revisión hasta ejecutar.
+Los parámetros se aplican automáticamente tras 250 ms sin cambios. Se cancela
+el cálculo anterior para no encolar trabajo obsoleto. Durante la actualización,
+los resultados anteriores se atenúan y exportación/revisión permanecen bloqueadas.
 Cambiar distrito o segmento recalcula la cartera y todas sus métricas.
 La búsqueda por texto solo filtra la lista, no altera el universo del escenario.
 
@@ -49,9 +51,9 @@ La búsqueda por texto solo filtra la lista, no altera el universo del escenario
 
 1. Abrir Territorio y observar el calor por daño relativo o presión de pago.
 2. Seleccionar un cliente en el mapa o en la lista accesible.
-3. Ejecutar con intensidad cero: el daño desaparece, el riesgo crediticio base no.
+3. Cambiar a intensidad cero: el daño desaparece, el riesgo crediticio base no.
 4. Restaurar 75% y abrir Cartera y pérdidas: revisar histograma y puente.
-5. Cambiar presupuesto, recalcular y comparar intervenciones.
+5. Cambiar presupuesto y comparar las intervenciones actualizadas automáticamente.
 6. Abrir Agentes, registrar evidencia sintética y comprobar el historial local.
 7. Exportar CSV; contrastar valores, semilla y supuestos.
 
