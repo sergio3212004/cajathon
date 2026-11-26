@@ -104,7 +104,7 @@ describe('Planificador y agentes locales', () => {
     const r = analyze(clients, scenario, 3000)
     expect(r.plan.cost).toBeLessThanOrEqual(3000)
     expect(new Set(r.plan.ids).size).toBe(r.plan.ids.length)
-    expect(r.before.damage - r.after.damage).toBeCloseTo(r.plan.benefit, 5)
+    expect(r.before.economicImpact - r.after.economicImpact).toBeCloseTo(r.plan.benefit, 5)
     expect(r.trace).toHaveLength(4)
     expect(r.trace.at(-1)!.evidence).toContain('sin LLM')
   })

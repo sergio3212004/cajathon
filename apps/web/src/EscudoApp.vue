@@ -3,24 +3,33 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import ExposureMap from './components/ExposureMap.vue'
 import LossDistribution from './components/LossDistribution.vue'
 import LossBridge from './components/LossBridge.vue'
-import { defaultScenario, hazards, portfolio, scenarioFingerprint, segments, stressPD, type Analysis, type ClimateScenario } from './domain/escudo'
+import SupplyWorkbench from './components/SupplyWorkbench.vue'
+import PreventiveFollowup from './components/PreventiveFollowup.vue'
+import EvidenceCatalog from './components/EvidenceCatalog.vue'
+import { defaultScenario, hazards, modelVersion, portfolio, scenarioFingerprint, segments, stressPD, type Analysis, type ClimateScenario } from './domain/escudo'
+import { chainForClient } from './domain/supply'
 import { money } from './domain/risk'
+import { workspaces, workspaceFromHash } from './domain/workspace'
 
-const tabs = [
-  { name: 'Territorio', icon: 'i-lucide-map' },
-  { name: 'Cartera y pérdidas', icon: 'i-lucide-chart-no-axes-combined' },
-  { name: 'Plan preventivo', icon: 'i-lucide-shield-check' },
-  { name: 'Agentes', icon: 'i-lucide-workflow' },
-  { name: 'Modelos y fuentes', icon: 'i-lucide-book-open' },
-]
-const view = ref('Territorio')
-const scenario = ref<ClimateScenario>({ ...defaultScenario })
+const view = ref(workspaceFromHash(location.hash))
+const activeWorkspace = computed(() => workspaces.find(w => w.id === view.value)!)
+watch(activeWorkspace, workspace => { document.title = `${workspace.label} | CajaEscudo` }, { immediate: true })
+const onHashChange = () => {
+  // In-page accessibility anchors must not switch the active workspace.
+  if (workspaces.some(w => `#${w.id}` === location.hash))
+    view.value = workspaceFromHash(location.hash)
+}
+window.addEventListener('hashchange', onHashChange)
+watch(view, value => {
+  if (location.hash !== `#${value}`) history.pushState(null, '', `#${value}`)
+})
+const scenario = ref<ClimateScenario>({ ...defaultScenario, supply: { ...defaultScenario.supply } })
 const budget = ref(15000)
 const district = ref('Todos')
 const segment = ref('Todos')
 const search = ref('')
 const selectedId = ref('CE-002')
-const layer = ref<'damage' | 'payment'>('damage')
+const layer = ref<'damage' | 'payment' | 'supply'>('damage')
 const heat = ref(true)
 const busy = ref(false)
 const error = ref('')
@@ -44,10 +53,10 @@ const clients = computed(() => portfolio.filter(c => (district.value === 'Todos'
 const fingerprint = computed(() => scenarioFingerprint(clients.value, scenario.value, budget.value))
 const dirty = computed(() => !!result.value && result.value.fingerprint !== fingerprint.value)
 const ranked = computed(() => [...(result.value?.before.clients ?? [])].sort((a, b) => b.shortfall - a.shortfall || b.damage - a.damage))
-const listed = computed(() => ranked.value.filter(r => `${r.client.name} ${r.client.id} ${r.client.district}`.toLocaleLowerCase('es').includes(search.value.toLocaleLowerCase('es'))))
+const listed = computed(() => ranked.value.filter(r => `${r.client.name} ${r.client.id} ${r.client.district} ${r.client.region}`.toLocaleLowerCase('es').includes(search.value.toLocaleLowerCase('es'))))
 const chosen = computed(() => ranked.value.find(r => r.client.id === selectedId.value) ?? ranked.value[0])
 const balance = computed(() => ranked.value.reduce((s, r) => s + r.client.balance, 0))
-const exposed = computed(() => ranked.value.filter(r => r.damage / r.client.assets >= .02))
+const exposed = computed(() => ranked.value.filter(r => r.damage > .01 || r.indirectLoss > .01))
 const highPriority = computed(() => ranked.value.filter(r => r.level === 'Alta').length)
 const planRows = computed(() => ranked.value.filter(r => result.value?.plan.ids.includes(r.client.id)))
 const planDistricts = computed(() => new Set(planRows.value.map(r => r.client.district)).size)
@@ -63,6 +72,9 @@ const pct = (value: number) => `${(value * 100).toLocaleString('es-PE', { maximu
 const compact = (n: number) => n >= 1e6 ? `S/ ${(n / 1e6).toFixed(2)} M` : n >= 1e3 ? `S/ ${(n / 1e3).toFixed(1)} mil` : money(n)
 const levelClass = (level: string) => level === 'Alta' ? 'high' : level === 'Moderada' ? 'moderate' : 'low'
 const measure = (sector: string, hazard: string) => hazard === 'Sequía' ? (sector === 'Agricultura' ? 'Reserva de agua y riego eficiente' : 'Reserva y abastecimiento alternativo') : hazard === 'Friaje' ? 'Cobertura térmica de activos sensibles' : hazard === 'Calor extremo' ? 'Sombra y protección térmica de inventario' : sector === 'Agricultura' ? 'Drenaje y protección de la cosecha' : 'Elevar inventario y proteger equipos'
+const actionFor = (row: typeof ranked.value[number]) => row.indirectLoss > 0
+  ? `${row.damage > 0 ? `${measure(row.client.sector, scenario.value.hazard)}; ` : ''}reserva de 3 días y sustitución adicional de hasta 30 puntos porcentuales`
+  : measure(row.client.sector, scenario.value.hazard)
 let worker: Worker | undefined
 let started = 0
 let updateTimer: ReturnType<typeof setTimeout> | undefined
@@ -74,7 +86,7 @@ function run() {
   if (!worker) return
   currentJob.value++
   busy.value = true; error.value = ''; message.value = ''; started = performance.now()
-  worker.postMessage({ id: currentJob.value, clients: JSON.parse(JSON.stringify(clients.value)), scenario: { ...scenario.value }, budget: budget.value })
+  worker.postMessage({ id: currentJob.value, clients: JSON.parse(JSON.stringify(clients.value)), scenario: JSON.parse(JSON.stringify(scenario.value)), budget: budget.value })
 }
 function startWorker() {
   try {
@@ -98,7 +110,7 @@ function scheduleUpdate() {
   updateTimer = setTimeout(run, 250)
 }
 run()
-onBeforeUnmount(() => { clearTimeout(updateTimer); worker?.terminate() })
+onBeforeUnmount(() => { clearTimeout(updateTimer); worker?.terminate(); window.removeEventListener('hashchange', onHashChange) })
 watch(fingerprint, scheduleUpdate)
 watch(selectedId, () => { note.value = ''; message.value = '' })
 function review() {
@@ -113,8 +125,8 @@ function exportCSV() {
   if (!result.value || dirty.value || busy.value) return
   const a = result.value
   const rows: (string | number)[][] = [
-    ['Datos', 'Cliente', 'Negocio', 'Zona', 'Segmento', 'Saldo PEN', 'Dano negocio PEN', 'Flujo insuficiente prob', 'PD supuesta 30d', 'Perdida crediticia PEN', 'Con prevencion PEN', 'Medida propuesta', 'Amenaza', 'Intensidad', 'Ventana amenaza dias', 'Trayectorias', 'Semilla', 'LGD', 'Version'],
-    ...a.before.clients.map((r, i) => ['SINTETICOS NO CALIBRADOS', r.client.id, r.client.name, r.client.district, r.client.segment, r.client.balance, r.damage.toFixed(2), r.shortfall.toFixed(4), r.pd.toFixed(4), r.expectedLoss.toFixed(2), a.after.clients[i]!.expectedLoss.toFixed(2), a.plan.ids.includes(r.client.id) ? measure(r.client.sector, a.scenario.hazard) : '', a.scenario.hazard, a.scenario.intensity, a.scenario.days, a.scenario.paths, a.scenario.seed, a.scenario.lgd, 'CE-1.0']),
+    ['Datos', 'Cliente', 'Negocio', 'Zona', 'Region', 'Segmento', 'Saldo PEN', 'Dano fisico PEN', 'Perdida operativa indirecta PEN', 'Impacto economico total PEN', 'Origen sintetico', 'Insumo sintetico', 'Relacion', 'Faltante equivalente dias', 'Flujo insuficiente prob', 'PD supuesta 30d', 'Perdida crediticia PEN', 'Con prevencion PEN', 'Medida propuesta', 'Amenaza', 'Intensidad', 'Ventana amenaza dias', 'Trayectorias', 'Semilla', 'LGD', 'Canal', 'Origen choque', 'Interrupcion nominal dias', 'Inventario dias', 'Sustitucion pct', 'Calidad fixture', 'Version', 'Huella'],
+    ...a.before.clients.map((r, i) => ['SINTETICOS NO CALIBRADOS', r.client.id, r.client.name, r.client.district, r.client.region, r.client.segment, r.client.balance, r.damage.toFixed(2), r.indirectLoss.toFixed(2), r.economicImpact.toFixed(2), chainForClient(r.client).origin, chainForClient(r.client).product, 'SINTETICA', r.unmetDays.toFixed(2), r.shortfall.toFixed(4), r.pd.toFixed(4), r.expectedLoss.toFixed(2), a.after.clients[i]!.expectedLoss.toFixed(2), a.plan.ids.includes(r.client.id) ? actionFor(r) : '', a.scenario.hazard, a.scenario.intensity, a.scenario.days, a.scenario.paths, a.scenario.seed, a.scenario.lgd, a.scenario.impactMode, a.scenario.supply.origin, a.scenario.supply.outageDays, a.scenario.supply.inventoryDays, a.scenario.supply.substitution, a.scenario.supply.dataQuality, modelVersion, a.fingerprint]),
   ]
   const csv = '\uFEFF' + rows.map(row => row.map(v => `"${String(v).replaceAll('"', '""')}"`).join(',')).join('\r\n')
   const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
@@ -129,112 +141,177 @@ function exportCSV() {
       <a class="skip-link" href="#main-content">Ir al contenido</a>
       <header class="product-header">
         <div class="product-identity">
-          <a class="product-brand" href="#" aria-label="CajaEscudo, territorio" @click.prevent="view = 'Territorio'"><UIcon name="i-lucide-shield-check" /><span>CajaEscudo<small>Inteligencia para llegar antes</small></span></a>
+          <a class="product-brand" href="#monitoring" aria-label="CajaEscudo, monitoreo"><UIcon name="i-lucide-shield-check" /><span>CajaEscudo<small>Gestión de riesgo climático</small></span></a>
           <span class="brand-separator"></span><img class="institution-logo" src="/brand/caja-trujillo.png" alt="Caja Trujillo" width="110" height="45">
         </div>
-        <div class="event-identity"><img src="/brand/cajathon.png" alt="Cajathon" width="104" height="51"></div>
+        <div class="event-identity"><span class="environment-label">Entorno de simulación</span><img src="/brand/cajathon.png" alt="Cajathon" width="104" height="51"></div>
       </header>
       <nav class="product-nav" aria-label="Navegación principal">
-        <div><button v-for="tab in tabs" :key="tab.name" :class="{ active: view === tab.name }" :aria-current="view === tab.name ? 'page' : undefined" @click="view = tab.name"><UIcon :name="tab.icon" />{{ tab.name }}</button></div>
-        <span class="analyst"><span>M</span>Miriam <small>Riesgos</small></span>
+        <div><a v-for="tab in workspaces" :key="tab.id" :href="`#${tab.id}`" :class="{ active: view === tab.id, 'nav-settings': tab.id === 'settings' }" :aria-current="view === tab.id ? 'page' : undefined"><UIcon :name="tab.icon" />{{ tab.label }}</a></div>
+        <span class="workspace-role">Área de riesgos</span>
       </nav>
 
       <main id="main-content" class="escudo-main">
         <div class="workspace-heading">
-          <div><p class="context-line"><span class="signal-dot"></span> La Libertad · Inclusión financiera y resiliencia</p>
-            <h1>{{ view === 'Territorio' ? 'El territorio avisa.' : view === 'Cartera y pérdidas' ? 'Del evento a la exposición financiera.' : view === 'Plan preventivo' ? 'Proteger también es priorizar.' : view === 'Agentes' ? 'La evidencia, antes de la decisión.' : 'Un modelo que se puede cuestionar.' }}</h1>
-            <p class="heading-description">{{ view === 'Territorio' ? 'Impacto climático y prioridades de atención de tu cartera.' : view === 'Cartera y pérdidas' ? 'Exposición financiera y distribución de pérdidas por segmento.' : view === 'Plan preventivo' ? 'Asignación preventiva según impacto y recursos disponibles.' : view === 'Agentes' ? 'Análisis coordinado, seguimiento de alertas y revisión de casos.' : 'Fuentes de información, parámetros y criterios de evaluación.' }}</p>
+          <div>
+            <h1>{{ activeWorkspace.label }}</h1>
+            <p class="workspace-scope">{{ clients.length }} clientes <span aria-hidden="true">/</span> {{ district === 'Todos' ? 'Todos los distritos' : district }} <span aria-hidden="true">/</span> {{ segment === 'Todos' ? 'Todos los segmentos' : segment }}</p>
           </div>
           <button class="button secondary" :disabled="!result || busy || dirty" @click="exportCSV"><UIcon name="i-lucide-download" /> Exportar reporte</button>
         </div>
 
         <section class="scenario-console" aria-label="Configuración del escenario">
-          <div class="scenario-label"><UIcon name="i-lucide-sliders-horizontal" /><strong>Condiciones climáticas<small>Monitoreo de cartera</small></strong></div>
+          <div class="scenario-label"><UIcon name="i-lucide-sliders-horizontal" /><strong>Escenario</strong></div>
           <label>Amenaza<select v-model="scenario.hazard" aria-label="Amenaza climática"><option v-for="h in hazards" :key="h">{{ h }}</option></select></label>
           <label>Distrito<select v-model="district" aria-label="Filtrar distrito"><option>Todos</option><option v-for="d in [...new Set(portfolio.map(c => c.district))]" :key="d">{{ d }}</option></select></label>
           <label>Segmento<select v-model="segment" aria-label="Filtrar segmento"><option>Todos</option><option v-for="s in segments" :key="s">{{ s }}</option></select></label>
           <label class="intensity-control"><span>Intensidad <b>{{ scenario.intensity }}%</b></span><input v-model.number="scenario.intensity" type="range" min="0" max="100" step="5" aria-label="Intensidad climática"></label>
           <label>Ventana de amenaza<select v-model.number="scenario.days" aria-label="Ventana de amenaza"><option :value="7">7 días</option><option :value="30">30 días</option><option :value="90">90 días</option></select></label>
+          <label>Canal de impacto<select v-model="scenario.impactMode" aria-label="Canal de impacto"><option value="combined">Directo + indirecto</option><option value="direct">Solo directo</option><option value="indirect">Solo indirecto</option></select></label>
         </section>
-        <div class="execution-status" aria-live="polite"><span><span class="signal-dot" :class="{ pending: busy || dirty }"></span>{{ busy || dirty ? 'Actualizando análisis…' : result ? 'Análisis actualizado' : 'Cargando cartera…' }}</span><button class="method-link" @click="view = 'Modelos y fuentes'">Metodología <UIcon name="i-lucide-info" /></button></div>
-        <div v-if="error" class="notice error-notice" role="alert">{{ error }}<button @click="run">Reintentar</button></div>
+        <div class="execution-status" aria-live="polite"><span><span class="signal-dot" :class="{ pending: busy || dirty }"></span>{{ error ? 'Análisis detenido · resultados anteriores' : busy || dirty ? 'Actualizando…' : result ? 'Actualizado' : 'Cargando…' }}</span><span class="simulation-context">Datos sintéticos · Resultados no calibrados <button class="method-link" @click="view = 'settings'" aria-label="Ver metodología y limitaciones"><UIcon name="i-lucide-info" /></button></span></div>
+        <div v-if="error" class="notice error-notice" role="alert"><span>{{ error }}</span><button @click="view = 'settings'">Revisar configuración</button><button @click="run">Reintentar</button></div>
         <div v-if="message" class="notice" role="status">{{ message }}<button aria-label="Cerrar confirmación" @click="message = ''"><UIcon name="i-lucide-x" /></button></div>
 
         <div v-if="result" class="analysis-content" :class="{ 'is-updating': busy || dirty }" :aria-busy="busy || dirty">
-          <div v-if="!ranked.length && view !== 'Modelos y fuentes'" class="empty-panel"><UIcon name="i-lucide-map-pin-off" /><h2>No hay clientes en esta combinación.</h2><p>No se encontraron clientes de ese segmento en el distrito seleccionado.</p><button class="button primary" @click="district = 'Todos'; segment = 'Todos'">Restablecer filtros</button></div>
+          <div v-if="!ranked.length && view !== 'settings'" class="empty-panel"><UIcon name="i-lucide-map-pin-off" /><h2>Sin clientes</h2><p>No hay clientes para los filtros seleccionados.</p><button class="button primary" @click="district = 'Todos'; segment = 'Todos'">Restablecer filtros</button></div>
 
-          <template v-else-if="view === 'Territorio'">
+          <SupplyWorkbench v-else-if="view === 'supply'" :analysis="result" :scenario="scenario" :selected="chosen" :pending="busy || dirty" @scenario="scenario = $event" @select="selectedId = $event" @review="view = 'followup'" />
+
+          <template v-else-if="view === 'monitoring'">
             <section class="territory-workspace">
               <div class="map-workbench">
-                <div class="map-heading"><div><h2>Geografía de la vulnerabilidad</h2><span>{{ result.scenario.hazard }} · {{ result.scenario.intensity }}% de intensidad · {{ ranked.length }} clientes</span></div><label class="heat-check"><input v-model="heat" type="checkbox"> Mapa de calor</label></div>
-                <div class="map-layer-controls" aria-label="Variable del mapa"><button :class="{ active: layer === 'damage' }" :aria-pressed="layer === 'damage'" @click="layer = 'damage'">Daño al negocio</button><button :class="{ active: layer === 'payment' }" :aria-pressed="layer === 'payment'" @click="layer = 'payment'">Presión de pago</button></div>
+                <div class="map-heading"><div><h2>Exposición territorial</h2><span>{{ result.scenario.hazard }} · {{ result.scenario.intensity }}% · {{ ranked.length }} clientes</span></div><label class="heat-check"><input v-model="heat" type="checkbox"> Mapa de calor</label></div>
+                <div class="map-layer-controls" aria-label="Variable del mapa"><button :class="{ active: layer === 'damage' }" :aria-pressed="layer === 'damage'" @click="layer = 'damage'">Daño físico</button><button :class="{ active: layer === 'supply' }" :aria-pressed="layer === 'supply'" @click="layer = 'supply'">Impacto indirecto</button><button :class="{ active: layer === 'payment' }" :aria-pressed="layer === 'payment'" @click="layer = 'payment'">Presión de pago</button></div>
                 <ExposureMap :items="ranked" :selected="chosen?.client.id ?? ''" :layer="layer" :heat="heat" @select="selectedId = $event" />
-                <div class="map-bottomline"><span><UIcon name="i-lucide-info" /> La exposición climática no implica incumplimiento.</span><button @click="view = 'Modelos y fuentes'">Fuentes y metodología</button></div>
+                <div class="map-bottomline"><span><UIcon name="i-lucide-info" /> La exposición climática no implica incumplimiento.</span><button @click="view = 'settings'">Metodología</button></div>
               </div>
               <aside class="territory-intelligence" aria-label="Resumen del escenario">
-                <div class="intelligence-title"><UIcon name="i-lucide-radar" /><span>Lectura del territorio</span></div>
-                <div class="territory-number"><span>Daño económico al negocio</span><strong>{{ compact(result.before.damage) }}</strong><p>Impacto estimado sobre los activos del negocio.</p></div>
-                <div class="territory-pair"><div><strong>{{ highPriority }}<small>/ {{ ranked.length }}</small></strong><span>Prioridad alta de atención</span></div><div><strong>{{ compact(exposed.reduce((s, r) => s + r.client.balance, 0)) }}</strong><span>Saldo en negocios con daño ≥2%</span></div></div>
-                <div class="institution-exposure"><span>Pérdida crediticia estimada</span><strong>{{ compact(result.before.expectedLoss) }}</strong><p>Rango P10–P90 <b>{{ compact(result.before.p10) }} — {{ compact(result.before.p90) }}</b></p><button @click="view = 'Cartera y pérdidas'">Ver distribución <UIcon name="i-lucide-chart-column" /></button></div>
-                <div class="preventive-signal"><UIcon name="i-lucide-shield-check" /><div><strong>{{ result.plan.ids.length }} medidas dentro del presupuesto</strong><p>Compara cuánto daño podrían evitar.</p><button @click="view = 'Plan preventivo'">Preparar intervención</button></div></div>
+                <div class="intelligence-title"><UIcon name="i-lucide-radar" /><span>Resumen de exposición</span></div>
+                <div class="territory-number"><span>Impacto económico al negocio</span><strong>{{ compact(result.before.economicImpact) }}</strong><p>{{ compact(result.before.damage) }} de daño físico y {{ compact(result.before.operatingLoss) }} de pérdida operativa, incluidos {{ compact(result.before.indirectLoss) }} indirectos.</p></div>
+                <div class="territory-pair"><div><strong>{{ highPriority }}<small>/ {{ ranked.length }}</small></strong><span>Prioridad alta de atención</span></div><div><strong>{{ compact(exposed.reduce((s, r) => s + r.client.balance, 0)) }}</strong><span>Saldo con impacto directo o indirecto simulado</span></div></div>
+                <div class="institution-exposure"><span>Pérdida crediticia estimada</span><strong>{{ compact(result.before.expectedLoss) }}</strong><p>P10–P90 <b>{{ compact(result.before.p10) }} — {{ compact(result.before.p90) }}</b></p><button @click="view = 'portfolio'">Ver riesgo de cartera <UIcon name="i-lucide-chart-column" /></button></div>
+                <div class="preventive-signal"><UIcon name="i-lucide-shield-check" /><div><strong>{{ result.plan.ids.length }} intervenciones propuestas</strong><button @click="view = 'interventions'">Ver intervenciones</button></div></div>
               </aside>
             </section>
 
             <div class="cases-layout">
-              <section class="case-list-panel"><div class="section-title"><h2>A quién atender primero</h2><span>Por probabilidad de flujo insuficiente</span></div><label class="search-field"><UIcon name="i-lucide-search" /><input v-model="search" type="search" placeholder="Buscar cliente, código o distrito" aria-label="Buscar cliente"></label><div class="client-list"><button v-for="r in listed" :key="r.client.id" class="client-row" :class="{ selected: chosen?.client.id === r.client.id }" :aria-pressed="chosen?.client.id === r.client.id" @click="selectedId = r.client.id"><span class="client-avatar"><UIcon :name="r.client.sector === 'Agricultura' ? 'i-lucide-sprout' : r.client.sector === 'Manufactura' ? 'i-lucide-factory' : 'i-lucide-store'" /></span><span class="client-name"><strong>{{ r.client.name }}</strong><small>{{ r.client.id }} · {{ r.client.district }}</small></span><span class="client-prob">{{ pct(r.shortfall) }}<small>flujo insuficiente</small></span><span class="risk-label" :class="levelClass(r.level)">{{ r.level }}</span></button><div v-if="!listed.length" class="list-empty">No hay coincidencias. <button @click="search = ''">Limpiar búsqueda</button></div></div></section>
+              <section class="case-list-panel">
+                <div class="section-title"><h2>Clientes prioritarios</h2><span>Ordenados por insuficiencia de flujo</span></div>
+                <label class="search-field"><UIcon name="i-lucide-search" /><input v-model="search" type="search" placeholder="Cliente, código o distrito" aria-label="Buscar cliente"></label>
+                <div class="client-list"><button v-for="r in listed" :key="r.client.id" class="client-row" :class="{ selected: chosen?.client.id === r.client.id }" :aria-pressed="chosen?.client.id === r.client.id" @click="selectedId = r.client.id">
+                  <span class="client-avatar"><UIcon :name="r.client.sector === 'Agricultura' ? 'i-lucide-sprout' : r.client.sector === 'Manufactura' ? 'i-lucide-factory' : 'i-lucide-store'" /></span>
+                  <span class="client-name"><strong>{{ r.client.name }}</strong><small>{{ r.client.id }} · {{ r.client.district }}</small></span>
+                  <span class="client-prob">{{ pct(r.shortfall) }}<small>flujo insuficiente</small></span><span class="risk-label" :class="levelClass(r.level)">{{ r.level }}</span>
+                </button><div v-if="!listed.length" class="list-empty">Sin coincidencias. <button @click="search = ''">Limpiar búsqueda</button></div></div>
+              </section>
               <section v-if="chosen" class="client-dossier">
                 <div class="section-title"><span class="dossier-code">{{ chosen.client.id }} / Expediente preventivo</span><span class="risk-label" :class="levelClass(chosen.level)">Prioridad {{ chosen.level.toLowerCase() }}</span></div>
                 <h2>{{ chosen.client.name }}</h2><p>{{ chosen.client.sector }} · {{ chosen.client.segment }} · {{ chosen.client.district }}</p>
+                <div class="dossier-dependency"><UIcon name="i-lucide-network" /><div><strong>{{ chainForClient(chosen.client).product }} desde {{ chainForClient(chosen.client).origin }}</strong><span>{{ chosen.client.region }} · {{ chosen.unmetDays.toFixed(1) }} días equivalentes sin abastecimiento</span><span>Daño físico: {{ money(chosen.damage) }} · Impacto indirecto: {{ money(chosen.indirectLoss) }}</span></div><button class="text-button" @click="view = 'supply'">Ver dependencia</button></div>
                 <div class="transmission-chain"><div><UIcon name="i-lucide-cloud-rain" /><strong>{{ chosen.closedDays.toFixed(1) }} días</strong><span>Interrupción estimada</span></div><UIcon name="i-lucide-chevron-right" /><div><UIcon name="i-lucide-trending-down" /><strong>−{{ pct(chosen.revenueDrop) }}</strong><span>Ingresos del mes</span></div><UIcon name="i-lucide-chevron-right" /><div><UIcon name="i-lucide-wallet" /><strong>{{ chosen.coverage.toFixed(2) }}×</strong><span>Cobertura media</span></div></div>
                 <div class="dossier-financials"><span>Saldo <b>{{ money(chosen.client.balance) }}</b></span><span>Obligaciones / mes <b>{{ money(chosen.client.payment + chosen.client.otherDebt) }}</b></span><span>Incluye otras entidades <b>{{ money(chosen.client.otherDebt) }}</b></span><span>Atraso al corte <b>{{ chosen.client.arrears }} días</b></span></div>
                 <p class="dossier-explanation"><UIcon name="i-lucide-scan-line" />Probabilidad de flujo insuficiente: {{ pct(chosen.shortfall) }}. Priorizar la revisión de liquidez y continuidad del negocio.</p>
-                <div class="dossier-actions"><button class="button primary" @click="view = 'Agentes'">Revisar alerta <UIcon name="i-lucide-arrow-up-right" /></button><button class="text-button" @click="view = 'Plan preventivo'">Ver prevención</button></div>
+                <div class="dossier-actions"><button class="button primary" @click="view = 'followup'">Revisar caso</button><button class="text-button" @click="view = 'interventions'">Ver intervenciones</button></div>
               </section>
             </div>
           </template>
 
-          <template v-else-if="view === 'Cartera y pérdidas'">
+          <template v-else-if="view === 'portfolio'">
             <section class="financial-ribbon"><div><span>Saldo analizado</span><strong>{{ compact(balance) }}</strong><small>{{ ranked.length }} clientes en cartera</small></div><div><span>Pérdida crediticia base</span><strong>{{ compact(result.before.baseLoss) }}</strong><small>Referencia sin impacto climático</small></div><div><span>Incremento por estrés</span><strong class="danger-text">+{{ compact(result.before.expectedLoss - result.before.baseLoss) }}</strong><small>Impacto adicional estimado</small></div><div><span>Con plan preventivo</span><strong class="positive-text">{{ compact(result.after.expectedLoss) }}</strong><small>Pérdida residual estimada</small></div></section>
-            <div class="analysis-charts"><section class="chart-panel"><div class="section-title"><h2>Distribución de pérdidas</h2><span>Rango de incertidumbre</span></div><p>Pérdida crediticia estimada bajo las condiciones seleccionadas.</p><LossDistribution :values="result.before.losses" :p10="result.before.p10" :p90="result.before.p90" :mean="result.before.expectedLoss" /></section><section class="chart-panel"><div class="section-title"><h2>Qué cambia cuando prevenimos</h2><span>Efecto del plan</span></div><p>Del riesgo base a la pérdida residual después de intervenir.</p><LossBridge :base="result.before.baseLoss" :stress="result.before.expectedLoss" :after="result.after.expectedLoss" /><div class="chart-foot">Inversión preventiva: <b>{{ money(result.plan.cost) }}</b></div></section></div>
+            <div class="analysis-charts">
+              <section class="chart-panel"><div class="section-title"><h2>Distribución de pérdidas</h2><span>Pérdida esperada condicional</span></div><LossDistribution :values="result.before.losses" :p10="result.before.p10" :p90="result.before.p90" :mean="result.before.expectedLoss" /></section>
+              <section class="chart-panel"><div class="section-title"><h2>Efecto de las intervenciones</h2><span>Estimación a 30 días</span></div><LossBridge :base="result.before.baseLoss" :stress="result.before.expectedLoss" :after="result.after.expectedLoss" /><div class="chart-foot">Inversión preventiva: <b>{{ money(result.plan.cost) }}</b></div></section>
+            </div>
             <details class="method-details"><summary>Cómo se estima el impacto financiero</summary><p>EL = PD supuesta × LGD × saldo. Logit no entrenado; capacidad de pago a 30 días; LGD {{ pct(result.scenario.lgd) }}. El incremento representa sensibilidad del resultado antes de impuestos si se reconociera como gasto; no duplica pérdidas reconocidas ni calcula provisiones.</p><p>El rango P10–P90 refleja los supuestos del simulador, no precisión predictiva ni VaR regulatorio.</p></details>
-            <section class="segment-panel"><div class="section-title"><h2>Concentración por segmento</h2><span>La misma cartera que ves en el mapa</span></div><div class="table-overflow"><table><caption class="sr-only">Exposición y pérdida esperada por segmento crediticio</caption><thead><tr><th>Segmento</th><th>Clientes</th><th>Saldo</th><th>Pérdida de estrés</th><th>Prioridad alta</th><th>Concentración de pérdida</th></tr></thead><tbody><tr v-for="r in segmentRows" :key="r.name"><th scope="row">{{ r.name }}</th><td>{{ r.count }}</td><td>{{ money(r.balance) }}</td><td>{{ money(r.loss) }}</td><td>{{ r.pressure }}</td><td><span class="table-bar"><i :style="{ width: `${r.loss / Math.max(1, result.before.expectedLoss) * 100}%` }"></i></span> {{ pct(r.loss / Math.max(1, result.before.expectedLoss)) }}</td></tr></tbody></table></div></section>
+            <section class="segment-panel"><div class="section-title"><h2>Concentración por segmento</h2><span>{{ ranked.length }} clientes</span></div><div class="table-overflow"><table><caption class="sr-only">Exposición y pérdida esperada por segmento crediticio</caption><thead><tr><th>Segmento</th><th>Clientes</th><th>Saldo</th><th>Pérdida de estrés</th><th>Prioridad alta</th><th>Concentración de pérdida</th></tr></thead><tbody><tr v-for="r in segmentRows" :key="r.name"><th scope="row">{{ r.name }}</th><td>{{ r.count }}</td><td>{{ money(r.balance) }}</td><td>{{ money(r.loss) }}</td><td>{{ r.pressure }}</td><td><span class="table-bar"><i :style="{ width: `${r.loss / Math.max(1, result.before.expectedLoss) * 100}%` }"></i></span> {{ pct(r.loss / Math.max(1, result.before.expectedLoss)) }}</td></tr></tbody></table></div></section>
           </template>
 
-          <template v-else-if="view === 'Plan preventivo'">
+          <template v-else-if="view === 'interventions'">
             <section class="prevention-layout">
               <div class="budget-panel">
-                <span class="panel-symbol"><UIcon name="i-lucide-shield-check" /></span><h2>Tu presupuesto tiene un destino.</h2><p>Distribución preventiva según el impacto esperado y los recursos disponibles.</p>
+                <h2>Presupuesto preventivo</h2>
                 <label>Presupuesto disponible <strong>{{ money(budget) }}</strong><input v-model.number="budget" type="range" min="0" max="50000" step="1000" aria-label="Presupuesto preventivo"></label>
                 <div class="budget-meter"><span :style="{ width: `${result.budget ? result.plan.cost / result.budget * 100 : 0}%` }"></span></div>
                 <div class="budget-breakdown"><span>Asignado <b>{{ money(result.plan.cost) }}</b></span><span>Disponible <b>{{ money(result.budget - result.plan.cost) }}</b></span></div>
-                <small>La asignación se ajusta automáticamente al presupuesto.</small>
+                <small>Asignación automática según beneficio estimado.</small>
               </div>
               <div class="prevention-evidence">
-                <div class="financial-ribbon compact-ribbon"><div><span>Negocios a proteger</span><strong>{{ result.plan.ids.length }}</strong><small>{{ planDistricts }} distritos · {{ planSectors }} segmentos</small></div><div><span>Daño al negocio evitado</span><strong class="positive-text">{{ compact(result.before.damage - result.after.damage) }}</strong><small>Reducción estimada del impacto</small></div></div>
-                <section class="chart-panel"><h2>Antes y después de intervenir</h2><div class="intervention-comparison"><div><span>Sin medidas</span><strong>{{ money(result.before.damage) }}</strong><i style="width:100%"></i></div><div><span>Con el plan</span><strong>{{ money(result.after.damage) }}</strong><i class="residual" :style="{ width: `${result.after.damage / Math.max(1, result.before.damage) * 100}%` }"></i></div></div><p>Inversión preventiva: <b>{{ money(result.plan.cost) }}</b></p></section>
+                <div class="financial-ribbon compact-ribbon"><div><span>Negocios a proteger</span><strong>{{ result.plan.ids.length }}</strong><small>{{ planDistricts }} distritos · {{ planSectors }} segmentos</small></div><div><span>Impacto económico evitado</span><strong class="positive-text">{{ compact(result.before.economicImpact - result.after.economicImpact) }}</strong><small>Daño físico y pérdida operativa · efecto hipotético</small></div></div>
+                <section class="chart-panel"><h2>Impacto económico estimado</h2><div class="intervention-comparison"><div><span>Sin intervención</span><strong>{{ money(result.before.economicImpact) }}</strong><i style="width:100%"></i></div><div><span>Con intervención</span><strong>{{ money(result.after.economicImpact) }}</strong><i class="residual" :style="{ width: `${result.after.economicImpact / Math.max(1, result.before.economicImpact) * 100}%` }"></i></div></div><div class="chart-foot">Inversión preventiva: <b>{{ money(result.plan.cost) }}</b></div><details class="method-details"><summary>Alcance del paquete preventivo</summary><p>Protección física, 3 días extra de inventario y hasta 30 puntos adicionales de sustitución. El costo fijo incluye la reserva; no se financia ni descuenta de las pérdidas mostradas. Efectividad hipotética.</p></details></section>
                 <details class="method-details"><summary>Criterios de priorización</summary><p>El objetivo monetario puede favorecer activos de mayor valor. La cobertura territorial y por segmento se informa, pero no se garantiza. La efectividad de las medidas es hipotética y requiere validación. El plan no implica desembolso ni cambios contractuales.</p></details>
               </div>
             </section>
-            <section class="segment-panel"><div class="section-title"><h2>Intervenciones propuestas</h2><span>Revisión humana requerida</span></div><div v-if="!planRows.length" class="list-empty">No hay medidas disponibles con este presupuesto. Ajusta el monto para ampliar la cobertura.</div><div v-else class="table-overflow"><table><thead><tr><th>Cliente</th><th>Distrito</th><th>Medida propuesta</th><th>Costo</th><th>Revisión</th></tr></thead><tbody><tr v-for="r in planRows" :key="r.client.id"><th scope="row"><button class="table-link" @click="selectedId = r.client.id; view = 'Agentes'">{{ r.client.name }}<small>{{ r.client.id }}</small></button></th><td>{{ r.client.district }}</td><td>{{ measure(r.client.sector, result.scenario.hazard) }}</td><td>{{ money(r.client.cost) }}</td><td><span class="risk-label" :class="hasReview(r.client.id) ? 'low' : 'moderate'">{{ hasReview(r.client.id) ? 'Revisado' : 'Pendiente' }}</span></td></tr></tbody></table></div></section>
+            <section class="segment-panel">
+              <div class="section-title"><h2>Intervenciones propuestas</h2><span>Revisión humana requerida</span></div>
+              <div v-if="!planRows.length" class="list-empty">No hay medidas disponibles con este presupuesto. Ajusta el monto para ampliar la cobertura.</div>
+              <div v-else class="table-overflow"><table><thead><tr><th>Cliente</th><th>Distrito</th><th>Paquete propuesto</th><th>Costo</th><th>Revisión</th></tr></thead><tbody>
+                <tr v-for="r in planRows" :key="r.client.id"><th scope="row"><button class="table-link" @click="selectedId = r.client.id; view = 'followup'">{{ r.client.name }}<small>{{ r.client.id }}</small></button></th><td>{{ r.client.district }}</td><td>{{ actionFor(r) }}</td><td>{{ money(r.client.cost) }}</td><td><span class="risk-label" :class="hasReview(r.client.id) ? 'low' : 'moderate'">{{ hasReview(r.client.id) ? 'Revisado' : 'Pendiente' }}</span></td></tr>
+              </tbody></table></div>
+            </section>
           </template>
 
-          <template v-else-if="view === 'Agentes'">
-            <div class="agent-workspace"><section class="agent-trace"><div class="section-title"><h2>Del dato a la acción, con trazabilidad</h2><span>CE-1.0</span></div><p>Análisis de vulnerabilidad y acciones preventivas para la cartera seleccionada.</p><ol><li v-for="(step, i) in result.trace" :key="step.name"><span class="agent-step-index">{{ i + 1 }}</span><div><div class="agent-step-title"><h3>{{ step.name }}</h3><span class="risk-label" :class="step.status === 'ok' ? 'low' : 'moderate'">{{ step.status === 'ok' ? 'Completado' : 'Requiere revisión' }}</span></div><p>{{ i === 0 ? `${ranked.length} clientes incorporados al análisis de cartera.` : i === 1 ? 'Exposición, flujo disponible e impacto financiero estimados.' : i === 2 ? `${result.plan.ids.length} medidas priorizadas dentro de ${money(result.budget)}.` : 'Validación humana pendiente antes de cualquier intervención.' }}</p><details class="agent-step-details"><summary>Ver trazabilidad</summary><code>{{ step.tool }}</code><p>{{ step.evidence }}</p></details></div></li></ol><details class="method-details"><summary>Detalles del procesamiento</summary><p>Agentes locales deterministas, sin LLM conectado. Tiempo de cálculo: {{ elapsed }} ms.</p><p class="trace-fingerprint">Referencia: {{ result.fingerprint }}</p></details></section>
-              <section v-if="chosen" class="human-review"><div class="review-heading"><UIcon name="i-lucide-user-check" /><span>Tu revisión cierra el circuito</span></div><label>Cliente<select v-model="selectedId" aria-label="Cliente para revisión"><option v-for="r in ranked" :key="r.client.id" :value="r.client.id">{{ r.client.id }} · {{ r.client.name }}</option></select></label><h2>{{ chosen.client.name }}</h2><span class="risk-label" :class="reviewed ? 'low' : levelClass(chosen.level)">{{ reviewed ? 'Revisado en este escenario' : `Prioridad ${chosen.level.toLowerCase()}` }}</span><p class="review-summary">{{ pct(chosen.shortfall) }} de trayectorias con insuficiencia de flujo. Daño medio: {{ money(chosen.damage) }}. {{ result.plan.ids.includes(chosen.client.id) ? 'Incluido en el plan preventivo.' : 'Sin medida asignada en este presupuesto.' }}</p><div class="review-task"><strong>Acción a validar con el asesor</strong><p>{{ measure(chosen.client.sector, result.scenario.hazard) }}. Verificar reserva de liquidez, factibilidad y consentimiento antes del contacto.</p></div><label>Evidencia de revisión <small>Mínimo 8 caracteres · No ingreses datos personales reales.</small><textarea v-model="note" maxlength="500" rows="3" placeholder="Ej.: validar costo y reserva con el asesor antes de intervenir." aria-label="Evidencia de revisión"></textarea></label><button class="button primary" :disabled="note.trim().length < 8 || busy || dirty" @click="review"><UIcon name="i-lucide-check-check" /> Registrar revisión humana</button><small class="storage-note">{{ storageAvailable ? 'Se guarda únicamente en este navegador. No es una auditoría institucional.' : 'Almacenamiento bloqueado: los registros solo duran esta sesión.' }}</small><details class="review-history"><summary>Historial local ({{ reviews.filter(r => r.id === chosen?.client.id).length }})</summary><p v-for="(r, i) in reviews.filter(r => r.id === chosen?.client.id).slice(-5).reverse()" :key="i"><b>{{ new Date(r.date).toLocaleString('es-PE') }}</b><br>{{ r.note }}<small>Escenario {{ r.fingerprint }}</small></p></details></section>
+          <template v-else-if="view === 'followup'">
+            <details class="process-details">
+              <summary>Registro del análisis <span>{{ modelVersion }} · {{ elapsed }} ms</span></summary>
+              <section class="agent-trace">
+                <div class="section-title"><h2>Etapas de procesamiento</h2><span>Agentes deterministas · Sin LLM</span></div>
+                <ol><li v-for="(step, i) in result.trace" :key="step.name"><span class="agent-step-index">{{ i + 1 }}</span><div>
+                  <div class="agent-step-title"><h3>{{ step.name }}</h3><span class="risk-label" :class="step.status === 'ok' ? 'low' : 'moderate'">{{ step.status === 'ok' ? 'Completado' : 'Requiere revisión' }}</span></div>
+                  <p>{{ step.evidence }}</p><details class="agent-step-details"><summary>Ver herramienta</summary><code>{{ step.tool }}</code></details>
+                </div></li></ol>
+                <details class="method-details"><summary>Detalles del procesamiento</summary><p>Agentes locales deterministas, sin LLM conectado. Tiempo de cálculo: {{ elapsed }} ms.</p><p class="trace-fingerprint">Referencia: {{ result.fingerprint }}</p></details>
+              </section>
+            </details>
+            <div class="followup-workspace">
+              <section v-if="chosen" class="human-review">
+                <div class="review-heading"><UIcon name="i-lucide-user-check" /><span>Revisión del caso</span></div>
+                <label>Cliente<select v-model="selectedId" aria-label="Cliente para revisión"><option v-for="r in ranked" :key="r.client.id" :value="r.client.id">{{ r.client.id }} · {{ r.client.name }}</option></select></label>
+                <h2>{{ chosen.client.name }}</h2><span class="risk-label" :class="reviewed ? 'low' : levelClass(chosen.level)">{{ reviewed ? 'Revisado en este escenario' : `Prioridad ${chosen.level.toLowerCase()}` }}</span>
+                <p class="review-summary">{{ pct(chosen.shortfall) }} de trayectorias con insuficiencia de flujo. Daño físico: {{ money(chosen.damage) }}. Impacto indirecto: {{ money(chosen.indirectLoss) }}. {{ result.plan.ids.includes(chosen.client.id) ? 'Incluido en el plan preventivo.' : 'Sin medida asignada en este presupuesto.' }}</p>
+                <div class="review-task"><strong>Acción a validar con el asesor</strong><p>{{ actionFor(chosen) }}. Verificar liquidez, factibilidad y consentimiento antes del contacto.</p></div>
+                <label>Observaciones <small>Mínimo 8 caracteres. No ingreses datos personales reales.</small><textarea v-model="note" maxlength="500" rows="3" placeholder="Disponibilidad de inventario y proveedor alternativo." aria-label="Evidencia de revisión"></textarea></label>
+                <button class="button primary" :disabled="note.trim().length < 8 || busy || dirty" @click="review"><UIcon name="i-lucide-check-check" /> Guardar revisión</button>
+                <small class="storage-note">{{ storageAvailable ? 'Se guarda únicamente en este navegador. No es una auditoría institucional.' : 'Almacenamiento bloqueado: los registros solo duran esta sesión.' }}</small>
+                <details class="review-history"><summary>Historial local ({{ reviews.filter(r => r.id === chosen?.client.id).length }})</summary><p v-for="(r, i) in reviews.filter(r => r.id === chosen?.client.id).slice(-5).reverse()" :key="i"><b>{{ new Date(r.date).toLocaleString('es-PE') }}</b><br>{{ r.note }}<small>Escenario {{ r.fingerprint }}</small></p></details>
+              </section>
+              <PreventiveFollowup v-if="chosen" :client-id="chosen.client.id" :fingerprint="result.fingerprint" :reviewed="reviewed" :disabled="busy || dirty" />
             </div>
           </template>
 
           <template v-else>
-            <section class="model-position"><UIcon name="i-lucide-flask-conical" /><div><h2>Prototipo funcional. Evidencia sintética.</h2><p>Las simulaciones, la interpolación del mapa, la optimización y el registro local sí se ejecutan. Ningún resultado representa una PD calibrada, un aviso meteorológico oficial o una decisión de Caja Trujillo.</p><p>Prioridad alta: flujo insuficiente en ≥25% de trayectorias; moderada: ≥10% y &lt;25%; baja: &lt;10%. Son umbrales ilustrativos, no políticas de Caja Trujillo.</p></div></section>
-            <section class="model-comparison"><h2>Qué modelos elegimos y por qué</h2><div class="table-overflow"><table><thead><tr><th>Método</th><th>Aporta</th><th>Estado</th><th>Validación necesaria</th></tr></thead><tbody><tr><th>Beta–Bernoulli</th><td>Incertidumbre sobre frecuencia de eventos; prior Beta(2,8).</td><td><span class="risk-label low">Implementado</span></td><td>Históricos binarios representativos; sensibilidad al prior.</td></tr><tr><th>Monte Carlo correlacionado</th><td>Propaga daño, caída de ingresos y presión de pago.</td><td><span class="risk-label low">Implementado</span></td><td>Curvas de daño, dependencias y backtesting por evento.</td></tr><tr><th>Función logística de estrés</th><td>Relaciona flujo, daño, atrasos y otras deudas con PD supuesta.</td><td><span class="risk-label moderate">No entrenada</span></td><td>Ajustar con etiquetas de incumplimiento a 30 días, Brier y calibración temporal.</td></tr><tr><th>Mochila 0/1</th><td>Maximiza daño al negocio evitado bajo presupuesto.</td><td><span class="risk-label low">Implementado</span></td><td>Efectividad causal, costos y restricciones de equidad.</td></tr><tr><th>Gradient boosting / supervivencia</th><td>No linealidad y tiempo hasta deterioro.</td><td><span class="risk-label neutral">Evaluación futura</span></td><td>Requiere volumen, censura, etiquetas y evaluación temporal; no se inventa precisión.</td></tr></tbody></table></div></section>
-            <div class="method-columns"><section class="chart-panel"><h2>Parámetros del modelo</h2><label>Trayectorias<select v-model.number="scenario.paths" aria-label="Cantidad de trayectorias"><option :value="500">500</option><option :value="1500">1,500</option><option :value="5000">5,000</option></select></label><label>Semilla<input v-model.number="scenario.seed" type="number" min="1" max="2147483647" aria-label="Semilla de simulación"></label><label>LGD supuesta <b>{{ pct(scenario.lgd) }}</b><input v-model.number="scenario.lgd" type="range" min="0" max="1" step=".05" aria-label="Pérdida dado incumplimiento"></label><p>Los parámetros se aplican automáticamente. Ventana climática: {{ result.scenario.days }} días. Ingresos y capacidad de pago: próximo mes (30 días).</p></section><section class="chart-panel"><h2>Factores del logit supuesto</h2><p>Ejemplo central de {{ chosen?.client.name ?? 'la cartera' }}. El cálculo por trayectoria se promedia después del enlace logístico; este ejemplo no reconstruye esa media.</p><div v-for="f in selectedLogit?.features ?? []" :key="f.label" class="factor-row"><span>{{ f.label }}</span><b>{{ f.contribution.toFixed(2) }}</b></div><p>logit = −3.8 + 2.1 × déficit de cobertura + 2.4 × daño relativo + 1.1 × atraso/30 + 0.7 × proporción de otras obligaciones.</p></section></div>
-            <section class="sources-panel"><h2>Fuentes y límites de uso</h2><div class="source-entries"><article><h3>Cartera y ubicación</h3><span class="risk-label moderate">Sintéticos</span><p>60 clientes, cinco segmentos. Coordenadas ficticias cerca de centros distritales. No hay datos personales ni conexión a Neon.</p></article><article><h3>SENAMHI / CENEPRED / INDECI</h3><span class="risk-label neutral">No integrados</span><p>Fuentes previstas. Se debe verificar vigencia, geometrías, licencias y trazabilidad. Cartera mínimo mensual; amenaza según vigencia.</p><a href="https://www.senamhi.gob.pe/" target="_blank" rel="noopener noreferrer">Consultar SENAMHI</a></article><article><h3>Mapa y marca</h3><span class="risk-label low">Recursos identificados</span><p>Mapa base OpenStreetMap; necesita internet y carga mosaicos externos. Logos descargados del sitio oficial de Cajathon. No implica aval institucional.</p><a href="https://cajathon.cajatrujillo.com.pe/" target="_blank" rel="noopener noreferrer">Cajathon oficial</a></article></div></section>
-            <div class="notice warning-notice"><UIcon name="i-lucide-shield-alert" /> Producción requiere permisos por rol, consentimiento, datos protegidos, auditoría institucional y evaluación de sesgos por zona, sector y segmento. La ubicación no se usa directamente en el logit crediticio.</div>
+            <section class="settings-panel">
+              <div class="section-title"><h2>Parámetros de simulación</h2><span>{{ modelVersion }}</span></div>
+              <div class="settings-fields">
+                <label>Trayectorias<select v-model.number="scenario.paths" aria-label="Cantidad de trayectorias"><option :value="500">500</option><option :value="1500">1,500</option><option :value="5000">5,000</option></select></label>
+                <label>Semilla<input v-model.number="scenario.seed" type="number" min="1" max="2147483647" aria-label="Semilla de simulación"></label>
+                <label>LGD supuesta <b>{{ pct(scenario.lgd) }}</b><input v-model.number="scenario.lgd" type="range" min="0" max="1" step=".05" aria-label="Pérdida dado incumplimiento"></label>
+                <label>Calidad de datos de la red<select v-model="scenario.supply.dataQuality" aria-label="Calidad de datos de la red"><option value="complete">Completos</option><option value="missing">Insuficientes</option><option value="stale">Vencidos</option></select></label>
+              </div>
+              <p class="settings-note">Cambios aplicados automáticamente. Calidad de datos simulada; no refleja el estado de una API externa.</p>
+            </section>
+            <details class="settings-disclosure">
+              <summary>Metodología y supuestos</summary>
+              <div class="settings-content">
+                <p class="settings-note">Datos sintéticos y parámetros no calibrados. Los resultados no son avisos oficiales, decisiones crediticias ni provisiones regulatorias. Prioridad alta: flujo insuficiente en ≥25% de trayectorias; moderada: ≥10% y &lt;25%; baja: &lt;10%. Umbrales ilustrativos.</p>
+            <section class="model-comparison"><h2>Modelos de cálculo</h2><div class="table-overflow"><table><thead><tr><th>Método</th><th>Aplicación</th><th>Estado</th><th>Validación necesaria</th></tr></thead><tbody>
+              <tr><th>Beta–Bernoulli</th><td>Frecuencia local supuesta; prior Beta(2,8).</td><td><span class="risk-label low">Implementado</span></td><td>No reemplaza pronósticos oficiales.</td></tr>
+              <tr><th>Red e inventario</th><td>Proveedor, corredor, distribuidor y cliente; demanda diaria normalizada, sustitución y sobrecostos.</td><td><span class="risk-label moderate">Fixtures sintéticos</span></td><td>Proveedores, rutas, capacidad y existencias reales. No es un solver nacional.</td></tr>
+              <tr><th>Monte Carlo compartido</th><td>Choques comunes; origen remoto con frecuencia mensual supuesta de 65%, intensidad y duración inciertas.</td><td><span class="risk-label low">Implementado</span></td><td>Dependencias y calibración local; sin precisión empírica demostrada.</td></tr>
+              <tr><th>Función logística de estrés</th><td>Flujo, daño, atrasos y otras deudas con PD supuesta.</td><td><span class="risk-label moderate">No entrenada</span></td><td>Etiquetas de incumplimiento, Brier y evaluación temporal.</td></tr>
+              <tr><th>Mochila 0/1</th><td>Maximiza daño físico y pérdida operativa evitados bajo presupuesto.</td><td><span class="risk-label low">Implementado</span></td><td>Costos, efectividad causal y equidad; paquete hipotético.</td></tr>
+              <tr><th>Boosting / supervivencia</th><td>No linealidad y tiempo hasta deterioro.</td><td><span class="risk-label neutral">Futuro</span></td><td>Datos, censura y etiquetas suficientes.</td></tr>
+            </tbody></table></div></section>
+                <section class="chart-panel"><h2>Factores del riesgo crediticio</h2><p>Ejemplo central: {{ chosen?.client.name ?? 'cartera' }}. No reconstruye la media por trayectoria.</p><div v-for="f in selectedLogit?.features ?? []" :key="f.label" class="factor-row"><span>{{ f.label }}</span><b>{{ f.contribution.toFixed(2) }}</b></div><p>Logit con coeficientes supuestos. Ingresos y capacidad de pago a 30 días.</p></section>
+              </div>
+            </details>
+            <details class="settings-disclosure"><summary>Fuentes de datos <span>6 integraciones pendientes</span></summary><div class="settings-content"><EvidenceCatalog /></div></details>
+            <details class="settings-disclosure"><summary>Privacidad y almacenamiento</summary><div class="settings-content"><p>Revisiones y seguimiento se guardan solo en este navegador. No hay autenticación institucional, envíos de mensajes ni conexión a datos bancarios. No ingreses datos personales reales.</p><p>El mapa base utiliza mosaicos de OpenStreetMap y requiere internet. No se envía la cartera a un proveedor LLM. El uso con datos reales requiere permisos por rol, protección de datos, auditoría y evaluación de sesgos.</p></div></details>
           </template>
         </div>
-        <div v-else-if="!error" class="initial-loading" role="status"><UIcon class="spinning" name="i-lucide-loader-circle" /><h2>Preparando tu cartera</h2><p>Actualizando exposición y prioridades de atención.</p></div>
+        <div v-else-if="!error" class="initial-loading" role="status"><UIcon class="spinning" name="i-lucide-loader-circle" /><h2>Cargando cartera</h2></div>
 
-        <footer class="product-footer"><span><UIcon name="i-lucide-shield-check" /> CajaEscudo <small>Anticipar para proteger.</small></span><p>Gestión preventiva del riesgo climático y crediticio</p><button @click="view = 'Modelos y fuentes'">Supuestos y fuentes</button></footer>
+        <footer class="product-footer"><span><UIcon name="i-lucide-shield-check" /> CajaEscudo</span><p>{{ modelVersion }} · Datos sintéticos · Uso demostrativo</p><button @click="view = 'settings'">Metodología y fuentes</button></footer>
       </main>
 
     </div>

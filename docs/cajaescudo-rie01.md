@@ -1,5 +1,18 @@
 # CajaEscudo · Diseño y motor demostrativo RIE-01
 
+**Registro histórico CE-1.0.** La simulación actual incorpora los cambios
+documentados en [CE-2.0: riesgo en red](simulacion-red-ce2.md).
+Las fórmulas y el objetivo de planificación de este archivo describen la
+versión inicial y no sustituyen la metodología CE-2.0.
+
+La evolución discutida el
+26 de noviembre de 2026 está registrada en el
+[plan de evolución](plan-evolucion-rie01.md), el
+[catálogo de fuentes](fuentes-integraciones-rie01.md) y la
+[comparación de alternativas LLM](alternativas-llm-costos.md).
+Las integraciones y modelos futuros no se consideran implementados solo por
+aparecer en esos planes.
+
 ## Público, marca e intención
 
 **Usuario principal:** analista de riesgos que decide dónde verificar
